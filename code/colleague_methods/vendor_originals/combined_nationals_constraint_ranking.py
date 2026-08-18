@@ -72,7 +72,7 @@ class CombinedNationalsConstraintRanking:
     def _is_usa_nationals(self, event_name):
         """Check if USA Nationals tier-3 (binding)."""
         import re
-        nats = re.search(r"\bnationals?\b, event_name, re.I")
+        nats = re.search(r"\bnationals?\b", event_name, re.I)
         usa = re.search(r"\busa?\b|\bu\.s\.", event_name, re.I)
         return bool(nats and usa)
     
@@ -209,7 +209,7 @@ class CombinedNationalsConstraintRanking:
             sigma = math.sqrt(self.var.get(player_id, self.PRIOR_VAR))
             n_events = sum(1 for x, _, _, _ in self.obs if x == player_id)
             if n_events >= min_events:
-                ranked.append((
+                result.append((
                     player_id, combined_rank, 
                     self.mean.get(player_id, 0.0), 
                     sigma, 

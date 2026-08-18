@@ -20,6 +20,8 @@ EXTERNAL_SYSTEMS = [
     ("external_bayesian", "Bayesian Skill Mu"),
     ("external_bayesian_conservative", "Bayesian Skill (Conservative)"),
     ("external_nationals", "Nationals-Constrained Log-Time"),
+    ("external_nationals_soft", "Nationals-Constrained Log-Time (Soft)"),
+    ("external_combined", "Combined Log-Time Volatility (Unconstrained)"),
 ]
 
 DISPLAY_COLUMNS = [
@@ -53,6 +55,8 @@ DISPLAY_COLUMNS = [
     ("external_bayesian_rank", "Bayesian Skill", "rank"),
     ("external_bayesian_conservative_rank", "Bayesian Skill Conservative", "rank"),
     ("external_nationals_rank", "Nationals-Constrained", "rank"),
+    ("external_nationals_soft_rank", "Nationals-Constrained (Soft)", "rank"),
+    ("external_combined_rank", "Combined Log-Time (Unconstrained)", "rank"),
 ]
 
 # Preserved in the analysis code for future re-enabling, but intentionally
@@ -129,6 +133,8 @@ PLOT_SYSTEMS = [
     ("external_bayesian", "Bayesian Skill Mu", "external_bayesian", "external_bayesian"),
     ("external_bayesian_conservative", "Bayesian Skill (Conservative)", "external_bayesian_conservative", "external_bayesian_conservative"),
     ("external_nationals", "Nationals-Constrained Log-Time", "external_nationals", "external_nationals"),
+    ("external_nationals_soft", "Nationals-Constrained Log-Time (Soft)", "external_nationals_soft", "external_nationals_soft"),
+    ("external_combined", "Combined Log-Time Volatility (Unconstrained)", "external_combined", "external_combined"),
 ]
 
 DEFAULT_PLOT_SYSTEM_KEYS = {
@@ -153,6 +159,7 @@ SCATTER_RANK_SYSTEMS = [
     ("external_bayesian_rank", "Bayesian Skill Mu"),
     ("external_bayesian_conservative_rank", "Bayesian Skill (Conservative)"),
     ("external_nationals_rank", "Nationals-Constrained Log-Time"),
+    ("external_nationals_soft_rank", "Nationals-Constrained Log-Time (Soft)"),
 ]
 
 INDIVIDUAL_SYSTEMS = [
@@ -174,6 +181,7 @@ INDIVIDUAL_SYSTEMS = [
     ("external_bayesian", "Bayesian Skill Mu", "external_bayesian"),
     ("external_bayesian_conservative", "Bayesian Skill (Conservative)", "external_bayesian_conservative"),
     ("external_nationals", "Nationals-Constrained Log-Time", "external_nationals"),
+    ("external_nationals_soft", "Nationals-Constrained Log-Time (Soft)", "external_nationals_soft"),
 ]
 
 PROFILE_SYSTEMS = [
@@ -203,6 +211,7 @@ EXTERNAL_PROFILE_SYSTEMS = [
     ("external_bayesian", "Bayesian Skill Mu"),
     ("external_bayesian_conservative", "Bayesian Skill (Conservative)"),
     ("external_nationals", "Nationals-Constrained Log-Time"),
+    ("external_nationals_soft", "Nationals-Constrained Log-Time (Soft)"),
 ]
 
 
@@ -1016,7 +1025,10 @@ def build_html(df: pd.DataFrame, output_path: Path, calc_path: Path) -> None:
     ranking_timeline = build_ranking_timeline(calc_path)
     puzzler_profiles, puzzler_events = build_puzzler_profiles(calc_path)
     cumulative_calibration_data = build_cumulative_calibration_data(calc_path, df)
-    calculation_overview_data = build_calculation_overview(calc_path, Path("data/data_event_results/source_of_truth_jpar_input.csv"))
+    try:
+      calculation_overview_data = build_calculation_overview(calc_path, Path("data/data_event_results/source_of_truth_jpar_input.csv"))
+    except FileNotFoundError:
+      calculation_overview_data = {}
     feedback_data = build_feedback_data(calc_path)
     cumulative_jpar_max = 4.0
     drift_json = json.dumps(drift_data, ensure_ascii=False)

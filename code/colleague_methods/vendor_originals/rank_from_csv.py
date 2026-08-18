@@ -48,18 +48,22 @@ def parse_seconds(text):
 
 def main():
     parser = argparse.ArgumentParser(description="Run ranking system from CSV input")
-    parser.add_argument("system", choices = ["4", "6", "7"], help="System: 4 = LogTime + Volatility, 6 = Bayesian Skill Mu, 7 = Combined Nationals Constraint")
+    parser.add_argument("system", choices = ["4", "6", "7", "8"], help="System: 4 = LogTime + Volatility, 6 = Bayesian Skill Mu, 7 = Combined Nationals Constraint, 8 = Combined (Log+Vol) + Soft Nationals")
     parser.add_argument("csv", help="Input CSV file with event results")
     parser.add_argument("-o", "--output", help="Output CSV file (optional)")
     args = parser.parse_args()
 
     # Import the right system
+    use_soft = False
     if args.system == "4":
         from ranking_systems.logtime_volatility_uncertainty_ranking import LogTimeVolatilityUncertaintyRanking as System
     elif args.system == "6":
         from ranking_systems.bayesian_skill_mu_ranking import BayesianSkillMuRanking as System
     elif args.system == "7":
         from ranking_systems.combined_nationals_constraint_ranking import CombinedNationalsConstraintRanking as System  
+    elif args.system == "8":
+        from ranking_systems.combined_nationals_constraint_ranking import CombinedNationalsConstraintRanking as System
+        use_soft = True
     else:
         raise ValueError(f"Unknown system: {args.system}")
     
@@ -100,7 +104,10 @@ def main():
         system.update(event_id, event["date"], event["name"], event["results"])
 
     # Output
-    leaderboard = system.leaderboard()
+    if use_soft and hasattr(system, "leaderboard_soft_nationals"):
+        leaderboard = system.leaderboard_soft_nationals()
+    else:
+        leaderboard = system.leaderboard()
     print(f"\n{'Rank':<6} {'Player':<20} {'Score':<15} {'Uncertainty':<15}")
     print("-" * 60)
     for row in leaderboard:

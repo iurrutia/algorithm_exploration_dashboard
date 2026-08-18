@@ -28,6 +28,10 @@ SYSTEMS = {
     "external_bayesian": "Bayesian Skill Mu",
     "external_bayesian_conservative": "Bayesian Skill (Conservative)",
     "external_nationals": "Nationals-Constrained Log-Time",
+    "external_nationals_soft": "Nationals-Constrained Log-Time (Soft)",
+    # Unconstrained combined measurement (same measurement used by the soft nationals
+    # pipeline but without applying any Nationals ordering).
+    "external_combined": "Combined Log-Time Volatility (Unconstrained)",
 }
 
 
@@ -206,11 +210,84 @@ def constrained_order(measurement_scores: dict[str, float], nationals: dict[str,
     return measured
 
 
+def constrained_order_soft(measurement_scores: dict[str, float], nationals: dict[str, int]) -> list[str]:
+    """Soft nationals constraint: preserve Nationals relative order but
+    otherwise follow measurement order. Uses the most-recent `nationals`
+    mapping passed in (expected to be the last Nationals event). This
+    implementation does not enforce an inactivity cutoff — it ranks over
+    the full measurement state to match other systems' time range.
+    """
+    # Measurement order (higher score first)
+    measured = sorted(measurement_scores, key=lambda pid: (-measurement_scores.get(pid, float("-inf")), pid))
+    # Nationals participants in published order
+    national_order = sorted((pid for pid in measured if pid in nationals), key=lambda pid: nationals[pid])
+
+    mean_map = measurement_scores
+    measurement_order = measured
+    nationals_pending = [p for p in national_order]
+
+    final: list[str] = []
+    placed: set[str] = set()
+
+    for p in measurement_order:
+        if p in placed:
+            continue
+
+        # Place any pending nationals whose measured score is greater than
+        # the current player's measured score.
+        while nationals_pending and mean_map.get(nationals_pending[0], float("-inf")) > mean_map.get(p, float("-inf")):
+            npid = nationals_pending.pop(0)
+            final.append(npid)
+            placed.add(npid)
+
+        # If the current player is a nationals participant still pending,
+        # place nationals up to and including them (preserving order).
+        if p in nationals_pending:
+            idx = nationals_pending.index(p)
+            to_place = nationals_pending[: idx + 1]
+            for npid in to_place:
+                final.append(npid)
+                placed.add(npid)
+            nationals_pending = nationals_pending[idx + 1 :]
+        else:
+            final.append(p)
+            placed.add(p)
+
+    # Append any remaining nationals
+    for npid in nationals_pending:
+        if npid not in placed:
+            final.append(npid)
+            placed.add(npid)
+
+    return final
+
+
 def load_events(path: Path) -> tuple[pd.DataFrame, list[dict[str, object]], dict[str, str]]:
-    raw = pd.read_csv(path, low_memory=False, dtype={"event_id": "string", "resolved_member_id": "string"})
+    raw = pd.read_csv(path, low_memory=False)
     raw["event_date"] = pd.to_datetime(raw["event_date"], errors="coerce")
-    raw["seconds"] = pd.to_numeric(raw.get("completion_time_seconds", raw.get("completion_seconds")), errors="coerce")
-    raw["member_key"] = raw["resolved_member_id"].apply(keyify)
+    # Robust seconds column detection
+    seconds_col = None
+    for col in ["completion_time_seconds", "completion_seconds", "completion_time_seconds_extrapolated", "completion_time", "seconds"]:
+        if col in raw.columns:
+            seconds_col = col
+            break
+    raw["seconds"] = pd.to_numeric(raw[seconds_col], errors="coerce") if seconds_col is not None else pd.Series([float("nan")] * len(raw))
+    # Robust member id detection
+    id_col = None
+    for col in ["resolved_member_id", "member_key", "member_id", "member", "mid", "person_id"]:
+        if col in raw.columns:
+            id_col = col
+            break
+    if id_col is None:
+        raw["member_key"] = ""
+    else:
+        raw["member_key"] = raw[id_col].apply(keyify)
+    # Ensure a full_name column exists
+    if "full_name" not in raw.columns:
+        if "first_name" in raw.columns and "last_name" in raw.columns:
+            raw["full_name"] = raw["first_name"].fillna("") + " " + raw["last_name"].fillna("")
+        else:
+            raw["full_name"] = raw["member_key"].astype(str)
     raw = raw.dropna(subset=["event_date", "event_id", "seconds"])
     raw = raw[raw["member_key"].ne("") & raw["seconds"].gt(0)].copy()
     raw = raw.sort_values(["event_date", "event_id", "seconds", "member_key"]).reset_index(drop=True)
@@ -250,6 +327,7 @@ def build_outputs(input_path: Path, output_dir: Path) -> None:
             "external_logtime": logtime.scores(),
             "external_logtime_conservative": logtime.scores(conservative=True),
             "external_logtime_no_tier": logtime_no_tier.scores(),
+            "external_combined": combined_measurement.scores(),
             "external_bayesian": bayesian.scores(conservative=False),
             "external_bayesian_conservative": bayesian.scores(conservative=True),
         }
@@ -272,6 +350,8 @@ def build_outputs(input_path: Path, output_dir: Path) -> None:
                 elif system_key == "external_logtime_no_tier":
                     predicted_time = math.exp(log_no_tier_difficulty - scores[pid])
                 elif system_key == "external_nationals":
+                    predicted_time = math.exp(combined_difficulty - combined_measurement.scores()[pid])
+                elif system_key == "external_combined":
                     predicted_time = math.exp(combined_difficulty - combined_measurement.scores()[pid])
                 elif eligible:
                     quantile = (predicted_ranks[pid] - 1) / max(len(eligible) - 1, 1)
@@ -297,9 +377,11 @@ def build_outputs(input_path: Path, output_dir: Path) -> None:
             "external_logtime": logtime.scores(),
             "external_logtime_conservative": logtime.scores(conservative=True),
             "external_logtime_no_tier": logtime_no_tier.scores(),
+            "external_combined": combined_measurement.scores(),
             "external_bayesian": bayesian.scores(conservative=False),
             "external_bayesian_conservative": bayesian.scores(conservative=True),
             "external_nationals": {pid: -rank for rank, pid in enumerate(combined_order, 1)},
+            "external_nationals_soft": {pid: -rank for rank, pid in enumerate(constrained_order_soft(combined_measurement.scores(), nationals), 1)},
         }
         all_players = sorted(set().union(*(set(scores) for scores in post_scores.values())))
         for pid in all_players:
@@ -314,9 +396,11 @@ def build_outputs(input_path: Path, output_dir: Path) -> None:
         "external_logtime": logtime.scores(),
         "external_logtime_conservative": logtime.scores(conservative=True),
         "external_logtime_no_tier": logtime_no_tier.scores(),
+        "external_combined": combined_measurement.scores(),
         "external_bayesian": bayesian.scores(conservative=False),
         "external_bayesian_conservative": bayesian.scores(conservative=True),
         "external_nationals": {pid: -rank for rank, pid in enumerate(constrained_order(combined_measurement.scores(), nationals), 1)},
+        "external_nationals_soft": {pid: -rank for rank, pid in enumerate(constrained_order_soft(combined_measurement.scores(), nationals), 1)},
     }
     all_players = sorted(set().union(*(set(scores) for scores in final_scores.values())))
     final_ranks = {key: ranks_desc(scores) for key, scores in final_scores.items()}
