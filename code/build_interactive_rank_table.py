@@ -864,19 +864,26 @@ def build_puzzler_profiles(calc_path: Path) -> tuple[dict[str, object], dict[str
             if record is None:
                 continue
             actual_score = post_scores.get((member_key, event_id, key))
+            # Use the model's predicted time for prediction visualizations when
+            # available; fall back to the incoming numeric score otherwise. Also
+            # expose a `constrained` flag so the UI can indicate when a system
+            # enforces a Nationals-constrained ordering.
+            predicted_time_val = float(row["predicted_time_diagnostic"]) if pd.notna(row["predicted_time_diagnostic"]) else None
+            incoming_val = float(row["incoming_score"]) if pd.notna(row["incoming_score"]) else None
             record["systems"][key] = {
-                "predicted_score": float(row["incoming_score"]),
-                "actual_score": float(actual_score) if pd.notna(actual_score) else None,
-                "predicted_time": float(row["predicted_time_diagnostic"]) if pd.notna(row["predicted_time_diagnostic"]) else None,
-                "predicted_rank": int(row["predicted_rank"]),
-                "actual_rank": int(row["actual_rank_common_cohort"]),
+              "predicted_score": float(predicted_time_val) if predicted_time_val is not None else incoming_val,
+              "actual_score": float(actual_score) if pd.notna(actual_score) else None,
+              "predicted_time": predicted_time_val,
+              "predicted_rank": int(row["predicted_rank"]),
+              "actual_rank": int(row["actual_rank_common_cohort"]),
+              "constrained": True if key in {"external_nationals", "external_nationals_soft"} else False,
             }
         for person in people.values():
             for record in person["events"]:
                 for key, _ in EXTERNAL_PROFILE_SYSTEMS:
                     record["systems"].setdefault(key, {
-                        "predicted_score": None, "actual_score": None, "predicted_time": None,
-                        "predicted_rank": None, "actual_rank": None,
+                    "predicted_score": None, "actual_score": None, "predicted_time": None,
+                    "predicted_rank": None, "actual_rank": None, "constrained": False,
                     })
     return people, event_payloads
 
@@ -1687,7 +1694,7 @@ const defaultPlotSystems = new Set({default_plot_systems_json});
 const selectedDriftSystems = new Set(defaultPlotSystems);
 const selectedHistSystems = new Set(defaultPlotSystems);
 const selectedScatterSystems = new Set({default_scatter_systems_json});
-const higherIsBetterScores = new Set(["elo_rating", "trueskill_conservative", "msp_like_score", "external_logtime", "external_logtime_conservative", "external_logtime_no_tier", "external_bayesian", "external_bayesian_conservative", "external_nationals"]);
+const higherIsBetterScores = new Set(["elo_rating", "trueskill_conservative", "msp_like_score", "external_logtime", "external_logtime_conservative", "external_logtime_no_tier", "external_bayesian", "external_bayesian_conservative", "external_nationals", "external_nationals_soft", "external_combined"]);
 let sortKey = "jpar_rank";
 let sortDir = "asc";
 let selectedMemberKey = null;
@@ -2597,10 +2604,16 @@ function buildAllPredictionComparisons() {{
       const target = pooled.get(comparison.column.key);
       const n = comparison.points.length;
       comparison.points.forEach(point => {{
+        // Normalize predicted/actual ranks to 0–100 percentiles.
+        // For systems where higher incoming scores are better, invert
+        // the normalized predicted percentile so higher=better visually.
+        const higher = higherIsBetterScores.has(comparison.scoreKey);
+        const predictedPct = n <= 1 ? 50 : (higher ? 100 * (n - point.predicted) / (n - 1) : 100 * (point.predicted - 1) / (n - 1));
+        const actualPct = n <= 1 ? 50 : 100 * (point.actual - 1) / (n - 1);
         target.points.push({{
           ...point,
-          predicted: n <= 1 ? 50 : 100 * (point.predicted - 1) / (n - 1),
-          actual: n <= 1 ? 50 : 100 * (point.actual - 1) / (n - 1),
+          predicted: predictedPct,
+          actual: actualPct,
           event: event.event,
           eventName: event.event_name,
           eventDate: event.date,
@@ -2693,7 +2706,8 @@ function renderProfileScatter(containerId, series, mode) {{
   const minimum = mode === "rank" ? 1 : Math.min(...all) * 0.94;
   const maximum = Math.max(...all) * (mode === "rank" ? 1.04 : 1.06);
   const x = value => scale(value, minimum, maximum, pad.left, width - pad.right);
-  const y = value => scale(value, minimum, maximum, height - pad.bottom, pad.top);
+  // Map smaller values to the top for consistent orientation with prediction plot.
+  const y = value => scale(value, minimum, maximum, pad.top, height - pad.bottom);
   const ticks = niceTicks(minimum, maximum, 5);
   const tickText = value => mode === "time" ? formatTime(value) : `#${{Math.max(1, Math.round(value))}}`;
   const grid = ticks.map(value => `<line x1="${{x(value).toFixed(1)}}" y1="${{pad.top}}" x2="${{x(value).toFixed(1)}}" y2="${{height - pad.bottom}}" stroke="#e5e7eb"/><line x1="${{pad.left}}" y1="${{y(value).toFixed(1)}}" x2="${{width - pad.right}}" y2="${{y(value).toFixed(1)}}" stroke="#e5e7eb"/><text x="${{x(value).toFixed(1)}}" y="${{height - 25}}" text-anchor="middle" font-size="10" fill="#6b7280">${{tickText(value)}}</text><text x="${{pad.left - 8}}" y="${{(y(value) + 3).toFixed(1)}}" text-anchor="end" font-size="10" fill="#6b7280">${{tickText(value)}}</text>`).join("");

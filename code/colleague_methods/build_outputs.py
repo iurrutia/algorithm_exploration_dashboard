@@ -331,15 +331,32 @@ def build_outputs(input_path: Path, output_dir: Path) -> None:
             "external_bayesian": bayesian.scores(conservative=False),
             "external_bayesian_conservative": bayesian.scores(conservative=True),
         }
+        # For prediction displays, keep incoming scores on the same measurement
+        # scale (continuous log-time measurements). Predicted ranks for the
+        # Nationals-constrained views are computed from the constrained orders
+        # below so that the UI compares like-for-like while leaderboards still
+        # expose rank-valued final scores.
         incoming_combined_order = constrained_order(combined_measurement.scores(), nationals)
-        incoming["external_nationals"] = {pid: -rank for rank, pid in enumerate(incoming_combined_order, 1)}
+        incoming_soft_order = constrained_order_soft(combined_measurement.scores(), nationals)
+        incoming["external_nationals"] = combined_measurement.scores()
+        incoming["external_nationals_soft"] = combined_measurement.scores()
         log_difficulty = logtime.event_difficulty_from_observed(results)
         log_no_tier_difficulty = logtime_no_tier.event_difficulty_from_observed(results)
         combined_difficulty = combined_measurement.event_difficulty_from_observed(results)
 
         for system_key, scores in incoming.items():
             eligible = [pid for pid in participants if pid in scores]
+            # By default predicted ranks come from the numeric scores.
             predicted_ranks = ranks_desc({pid: scores[pid] for pid in eligible})
+            # For nationals-constrained systems, use the constrained order to
+            # assign predicted ranks while still displaying the measurement
+            # score as `incoming_score`.
+            if system_key == "external_nationals":
+                constrained_list = [pid for pid in incoming_combined_order if pid in eligible]
+                predicted_ranks = {pid: index for index, pid in enumerate(constrained_list, 1)}
+            elif system_key == "external_nationals_soft":
+                constrained_list = [pid for pid in incoming_soft_order if pid in eligible]
+                predicted_ranks = {pid: index for index, pid in enumerate(constrained_list, 1)}
             eligible_actual = ranks_desc({pid: -actual_times[pid] for pid in eligible})
             for pid in eligible:
                 predicted_time = math.nan
@@ -350,6 +367,8 @@ def build_outputs(input_path: Path, output_dir: Path) -> None:
                 elif system_key == "external_logtime_no_tier":
                     predicted_time = math.exp(log_no_tier_difficulty - scores[pid])
                 elif system_key == "external_nationals":
+                    predicted_time = math.exp(combined_difficulty - combined_measurement.scores()[pid])
+                elif system_key == "external_nationals_soft":
                     predicted_time = math.exp(combined_difficulty - combined_measurement.scores()[pid])
                 elif system_key == "external_combined":
                     predicted_time = math.exp(combined_difficulty - combined_measurement.scores()[pid])
