@@ -1,6 +1,6 @@
 # JPAR Drift Inference
 
-As-of median JPAR moved from `1.1380` to `1.4545` across the corrected cutoff run, a change of `+0.3165`.
+As-of median JPAR moved from `1.1579` to `1.5172` across the corrected cutoff run, a change of `+0.3593`.
 
 ## Mechanism
 
@@ -10,7 +10,7 @@ This means the system is path-dependent. If the population entering the ranking 
 
 ## Diagnostics From This Run
 
-- Correlation between event calibration multiplier and new-row share: `0.310`.
+- Correlation between event calibration multiplier and new-row share: `0.336`.
 - Compare the PDF drift decomposition page: if the fixed early cohort is stable while the all-ranked median drifts, population mix is a major driver. If the fixed cohort also drifts, the update/calibration mechanics are changing scores for existing people.
 - Large one-event disagreements indicate that current JPAR can be strongly affected by a person's first event context, especially before enough history accumulates.
 

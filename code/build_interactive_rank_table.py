@@ -1242,6 +1242,34 @@ def build_html(df: pd.DataFrame, output_path: Path, calc_path: Path) -> None:
     #customRankPlot {{
       grid-template-columns: minmax(0, 1fr);
     }}
+    #rankHistoryPlot svg {{
+      height: 560px;
+    }}
+    .selected-puzzlers {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      min-height: 34px;
+      margin: 10px 0 14px;
+    }}
+    .selected-puzzler {{
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 6px 9px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: #f8fafc;
+      font-size: 13px;
+    }}
+    .selected-puzzler button {{
+      min-width: auto;
+      padding: 0 3px;
+      border: 0;
+      color: #64748b;
+      background: transparent;
+      font-weight: 700;
+    }}
     #feedbackPlots svg {{
       height: 360px;
     }}
@@ -1473,6 +1501,7 @@ def build_html(df: pd.DataFrame, output_path: Path, calc_path: Path) -> None:
   <nav class="tab-bar" role="tablist" aria-label="JPAR analysis sections">
     <button class="tab-button" id="tab-raw" role="tab" aria-controls="panel-raw" aria-selected="true" data-tab="raw">Raw Data</button>
     <button class="tab-button" id="tab-rankings" role="tab" aria-controls="panel-rankings" aria-selected="false" data-tab="rankings" tabindex="-1">Ranking Comparison</button>
+    <button class="tab-button" id="tab-rank-history" role="tab" aria-controls="panel-rank-history" aria-selected="false" data-tab="rank-history" tabindex="-1">Ranking History</button>
     <button class="tab-button" id="tab-puzzler" role="tab" aria-controls="panel-puzzler" aria-selected="false" data-tab="puzzler" tabindex="-1">Puzzler Data</button>
     <button class="tab-button" id="tab-predictions" role="tab" aria-controls="panel-predictions" aria-selected="false" data-tab="predictions" tabindex="-1">Predictions</button>
     <button class="tab-button" id="tab-misc" role="tab" aria-controls="panel-misc" aria-selected="false" data-tab="misc" tabindex="-1">Miscellaneous</button>
@@ -1565,6 +1594,23 @@ def build_html(df: pd.DataFrame, output_path: Path, calc_path: Path) -> None:
   </div>
   <div id="customRankPlot" class="plot-grid"></div>
   <div class="page-note">Note: Some ranking systems are currently disabled pending further testing.</div>
+  </section>
+  <section class="tab-panel" id="panel-rank-history" role="tabpanel" aria-labelledby="tab-rank-history" data-panel="rank-history" hidden>
+  <h1>Compare Puzzler Scores Over Time</h1>
+  <div class="tab-intro">Choose one ranking system, then search for and add puzzlers to compare their underlying score after every event. Current and event-level ranks are shown alongside the scores.</div>
+  <div class="controls" style="align-items:flex-end">
+    <label>Ranking system<br><select id="rankHistorySystem" style="min-width:280px"></select></label>
+    <label style="flex:1 1 320px">Add a puzzler<br><input id="rankHistorySearch" type="search" list="rankHistoryNames" placeholder="Start typing a name..." autocomplete="off" style="width:100%"></label>
+    <datalist id="rankHistoryNames"></datalist>
+    <button id="rankHistoryAdd">Add puzzler</button>
+    <button id="rankHistoryClear">Clear all</button>
+    <span id="rankHistoryMeta" class="meta"></span>
+  </div>
+  <div id="rankHistorySelected" class="selected-puzzlers"></div>
+  <div class="muted">Scores are carried forward between a puzzler's own events. Ranks are recalculated across the full leaderboard after each event, so a rank can change when someone else competes.</div>
+  <div id="rankHistoryPlot" class="plot-card" style="margin-top:12px"></div>
+  <h2>Event-by-event scores and ranks</h2>
+  <div class="table-wrap" style="max-height:520px"><table id="rankHistoryTable"></table></div>
   </section>
   <section class="tab-panel" id="panel-puzzler" role="tabpanel" aria-labelledby="tab-puzzler" data-panel="puzzler" hidden>
   <h1>Puzzler Data</h1>
@@ -1694,6 +1740,10 @@ let predictionViewMode = "bands";
 let predictionScopeMode = "event";
 let predictionEntrantSortKey = "incoming_jpar_relative";
 let predictionEntrantSortDir = "asc";
+let selectedRankHistoryPeople = [];
+let rankHistoryInitialized = false;
+const rankHistoryCache = new Map();
+const rankHistoryColors = ["#2563eb", "#f97316", "#16a34a", "#7c3aed", "#dc2626", "#0891b2", "#ca8a04", "#475569"];
 const renderedTabs = new Set();
 
 function rebuildRankingRows(cutoffIndex) {{
@@ -1734,6 +1784,205 @@ function initializeRankingSlider() {{
   rebuildRankingRows(Number(slider.value));
 }}
 
+function rankHistoryPeopleOptions() {{
+  const people = new Map();
+  rows.forEach(row => {{
+    if (row._member_key && row.full_name) people.set(String(row._member_key), String(row.full_name));
+  }});
+  rankingTimeline.forEach(event => event.updates.forEach(update => {{
+    if (update._member_key && update.full_name) people.set(String(update._member_key), String(update.full_name));
+  }}));
+  const nameCounts = new Map();
+  people.forEach(name => nameCounts.set(name, (nameCounts.get(name) || 0) + 1));
+  return [...people.entries()].map(([key, name]) => ({{
+    key,
+    name,
+    display: nameCounts.get(name) > 1 ? `${{name}} — ${{key}}` : name,
+  }})).sort((a, b) => a.name.localeCompare(b.name) || a.key.localeCompare(b.key));
+}}
+
+function buildRankHistorySnapshots(rankKey) {{
+  if (rankHistoryCache.has(rankKey)) return rankHistoryCache.get(rankKey);
+  const scoreKey = rankKey.replace(/_rank$/, "");
+  const direction = higherIsBetterScores.has(scoreKey) ? -1 : 1;
+  const state = new Map();
+  const snapshots = rankingTimeline.map((event, eventIndex) => {{
+    event.updates.forEach(update => {{
+      const memberKey = String(update._member_key);
+      const previous = state.get(memberKey) || {{_member_key: memberKey}};
+      state.set(memberKey, Object.assign(previous, update));
+    }});
+    const ranked = [...state.values()]
+      .filter(row => row[scoreKey] != null && Number.isFinite(Number(row[scoreKey])))
+      .sort((a, b) => direction * (Number(a[scoreKey]) - Number(b[scoreKey])) || String(a.full_name).localeCompare(String(b.full_name)));
+    const ranks = {{}};
+    const scores = {{}};
+    let previousScore = null;
+    let previousRank = null;
+    ranked.forEach((row, index) => {{
+      const score = Number(row[scoreKey]);
+      const rank = previousScore !== null && score === previousScore ? previousRank : index + 1;
+      ranks[String(row._member_key)] = rank;
+      scores[String(row._member_key)] = score;
+      previousScore = score;
+      previousRank = rank;
+    }});
+    return {{
+      index: eventIndex,
+      date: event.date,
+      event: event.event,
+      event_name: event.event_name,
+      ranks,
+      scores,
+    }};
+  }});
+  rankHistoryCache.set(rankKey, snapshots);
+  return snapshots;
+}}
+
+function addRankHistoryPerson() {{
+  const input = document.getElementById("rankHistorySearch");
+  const query = input.value.trim().toLowerCase();
+  if (!query) return;
+  const options = rankHistoryPeopleOptions();
+  let match = options.find(person => person.display.toLowerCase() === query || person.name.toLowerCase() === query);
+  if (!match) {{
+    const partial = options.filter(person => person.display.toLowerCase().includes(query));
+    if (partial.length === 1) match = partial[0];
+  }}
+  if (!match) {{
+    document.getElementById("rankHistoryMeta").textContent = "Choose one puzzler from the search suggestions.";
+    return;
+  }}
+  if (!selectedRankHistoryPeople.includes(match.key)) selectedRankHistoryPeople.push(match.key);
+  input.value = "";
+  renderRankHistory();
+}}
+
+function latestRankInHistory(snapshots, memberKey) {{
+  for (let index = snapshots.length - 1; index >= 0; index -= 1) {{
+    const rank = snapshots[index].ranks[memberKey];
+    if (rank != null) return rank;
+  }}
+  return null;
+}}
+
+function latestScoreInHistory(snapshots, memberKey) {{
+  for (let index = snapshots.length - 1; index >= 0; index -= 1) {{
+    const score = snapshots[index].scores[memberKey];
+    if (score != null) return score;
+  }}
+  return null;
+}}
+
+function renderRankHistory() {{
+  const rankKey = document.getElementById("rankHistorySystem").value;
+  const scoreKey = rankKey.replace(/_rank$/, "");
+  const scoreMode = true;
+  const system = columns.find(column => column.key === rankKey);
+  const people = new Map(rankHistoryPeopleOptions().map(person => [person.key, person]));
+  const snapshots = buildRankHistorySnapshots(rankKey);
+  const selected = selectedRankHistoryPeople.map(key => people.get(key)).filter(Boolean);
+  const selectedContainer = document.getElementById("rankHistorySelected");
+  selectedContainer.innerHTML = selected.length ? selected.map((person, index) => {{
+    const rank = latestRankInHistory(snapshots, person.key);
+    const score = latestScoreInHistory(snapshots, person.key);
+    const color = rankHistoryColors[index % rankHistoryColors.length];
+    const currentValue = scoreMode && score != null ? `${{Number(score).toFixed(4)}} · #${{rank}}` : (rank == null ? "not ranked" : "#" + rank);
+    return `<span class="selected-puzzler"><span style="color:${{color}}">●</span><strong>${{escapeAttr(person.name)}}</strong><span class="muted">${{currentValue}}</span><button type="button" data-remove-rank-person="${{escapeAttr(person.key)}}" aria-label="Remove ${{escapeAttr(person.name)}}">×</button></span>`;
+  }}).join("") : `<span class="muted">No puzzlers added yet.</span>`;
+  selectedContainer.querySelectorAll("[data-remove-rank-person]").forEach(button => button.addEventListener("click", () => {{
+    selectedRankHistoryPeople = selectedRankHistoryPeople.filter(key => key !== button.dataset.removeRankPerson);
+    renderRankHistory();
+  }}));
+
+  const plot = document.getElementById("rankHistoryPlot");
+  const table = document.getElementById("rankHistoryTable");
+  if (!selected.length) {{
+    document.getElementById("rankHistoryMeta").textContent = "Add two or more puzzlers to compare.";
+    plot.innerHTML = `<div class="muted" style="padding:28px 12px; text-align:center">Search for a puzzler above and select Add puzzler.</div>`;
+    table.innerHTML = "";
+    return;
+  }}
+
+  const series = selected.map((person, index) => ({{
+    ...person,
+    color: rankHistoryColors[index % rankHistoryColors.length],
+    points: snapshots.map(snapshot => ({{
+      snapshot,
+      rank: snapshot.ranks[person.key],
+      score: snapshot.scores[person.key],
+    }})).filter(point => point.rank != null),
+  }}));
+  const allValues = series.flatMap(item => item.points.map(point => Number(scoreMode ? point.score : point.rank))).filter(Number.isFinite);
+  let yMin = scoreMode ? Math.min(...allValues) : 1;
+  let yMax = scoreMode ? Math.max(...allValues) : Math.max(10, Math.ceil(Math.max(...allValues) / 25) * 25);
+  if (scoreMode) {{
+    const valuePad = (yMax - yMin) * 0.08 || 0.05;
+    yMin -= valuePad;
+    yMax += valuePad;
+  }}
+  const width = 1160, height = 560, pad = {{left: 64, right: 24, top: 28, bottom: 66}};
+  const xMax = Math.max(1, snapshots.length - 1);
+  const x = index => scale(index, 0, xMax, pad.left, width - pad.right);
+  const y = value => scoreMode
+    ? scale(value, yMin, yMax, height - pad.bottom, pad.top)
+    : scale(value, yMin, yMax, pad.top, height - pad.bottom);
+  const yTicks = scoreMode
+    ? niceTicks(yMin, yMax, 6)
+    : [...new Set([1, ...niceTicks(1, yMax, 6).map(value => Math.max(1, Math.round(value)))])].sort((a, b) => a - b);
+  const yGrid = yTicks.map(value => `<line x1="${{pad.left}}" y1="${{y(value).toFixed(1)}}" x2="${{width - pad.right}}" y2="${{y(value).toFixed(1)}}" stroke="#e5e7eb"/><text x="${{pad.left - 9}}" y="${{(y(value) + 4).toFixed(1)}}" text-anchor="end" font-size="11" fill="#6b7280">${{scoreMode ? Number(value).toFixed(2) : "#" + value}}</text>`).join("");
+  const tickIndexes = [...new Set(Array.from({{length: Math.min(5, snapshots.length)}}, (_, index) => Math.round(index * (snapshots.length - 1) / Math.max(1, Math.min(5, snapshots.length) - 1))))];
+  const xTicks = tickIndexes.map(index => {{
+    const snapshot = snapshots[index];
+    return `<line x1="${{x(index).toFixed(1)}}" y1="${{height - pad.bottom}}" x2="${{x(index).toFixed(1)}}" y2="${{height - pad.bottom + 5}}" stroke="#6b7280"/><text x="${{x(index).toFixed(1)}}" y="${{height - 38}}" text-anchor="middle" font-size="10" fill="#6b7280">${{snapshot.date}}</text>`;
+  }}).join("");
+  const lines = series.map(item => {{
+    const path = item.points.map((point, index) => `${{index === 0 ? "M" : "L"}}${{x(point.snapshot.index).toFixed(1)}},${{y(scoreMode ? point.score : point.rank).toFixed(1)}}`).join(" ");
+    const dots = item.points.map(point => {{
+      const valueLabel = scoreMode ? `score: ${{Number(point.score).toFixed(4)}}` : `rank: #${{point.rank}}`;
+      return `<circle class="hover-target" cx="${{x(point.snapshot.index).toFixed(1)}}" cy="${{y(scoreMode ? point.score : point.rank).toFixed(1)}}" r="3.2" fill="${{item.color}}" stroke="#fff" stroke-width="0.8" data-tooltip="${{tooltipText(item.name, system?.label || rankKey, valueLabel, `rank: #${{point.rank}}`, point.snapshot.date, point.snapshot.event_name)}}"></circle>`;
+    }}).join("");
+    return `<path d="${{path}}" fill="none" stroke="${{item.color}}" stroke-width="2.5" opacity="0.9"/>${{dots}}`;
+  }}).join("");
+  const legend = series.map((item, index) => `<g transform="translate(${{pad.left + (index % 4) * 260}},${{12 + Math.floor(index / 4) * 17}})"><circle cx="0" cy="0" r="4" fill="${{item.color}}"/><text x="8" y="4" font-size="11" fill="#374151">${{escapeAttr(item.name)}}</text></g>`).join("");
+  const plotMetric = scoreMode ? "raw score" : "rank";
+  const yAxisLabel = higherIsBetterScores.has(scoreKey)
+    ? "Raw score (higher is better)"
+    : "Raw score (lower is better)";
+  plot.innerHTML = `<div class="plot-title">${{system?.label || rankKey}} ${{plotMetric}} after each event</div><svg viewBox="0 0 ${{width}} ${{height}}">${{yGrid}}<line x1="${{pad.left}}" y1="${{height - pad.bottom}}" x2="${{width - pad.right}}" y2="${{height - pad.bottom}}" stroke="#9ca3af"/><line x1="${{pad.left}}" y1="${{pad.top}}" x2="${{pad.left}}" y2="${{height - pad.bottom}}" stroke="#9ca3af"/>${{xTicks}}${{lines}}${{legend}}<text x="15" y="${{height / 2}}" text-anchor="middle" font-size="12" transform="rotate(-90 15 ${{height / 2}})">${{yAxisLabel}}</text><text x="${{width / 2}}" y="${{height - 4}}" text-anchor="middle" font-size="12">Event date</text></svg>`;
+
+  const visibleSnapshots = snapshots.filter(snapshot => selected.some(person => snapshot.ranks[person.key] != null)).slice().reverse();
+  const header = `<thead><tr><th>Date</th><th>Event</th>${{selected.map(person => `<th>${{escapeAttr(person.name)}}${{scoreMode ? " score (rank)" : ""}}</th>`).join("")}}</tr></thead>`;
+  const body = `<tbody>${{visibleSnapshots.map(snapshot => `<tr><td>${{snapshot.date}}</td><td>${{escapeAttr(snapshot.event_name)}}</td>${{selected.map(person => {{
+    const rank = snapshot.ranks[person.key];
+    const score = snapshot.scores[person.key];
+    const display = rank == null ? "" : (scoreMode ? `${{Number(score).toFixed(4)}} (#${{rank}})` : "#" + rank);
+    return `<td>${{display}}</td>`;
+  }}).join("")}}</tr>`).join("")}}</tbody>`;
+  table.innerHTML = header + body;
+  document.getElementById("rankHistoryMeta").textContent = `${{selected.length}} puzzler${{selected.length === 1 ? "" : "s"}} · ${{snapshots.length}} ranking events`;
+  attachPlotTooltips();
+}}
+
+function initializeRankHistory() {{
+  if (!rankHistoryInitialized) {{
+    const systemSelect = document.getElementById("rankHistorySystem");
+    columns.filter(column => column.kind === "rank").forEach(column => systemSelect.insertAdjacentHTML("beforeend", `<option value="${{column.key}}">${{column.label}}</option>`));
+    systemSelect.value = columns.some(column => column.key === "external_logtime_rank") ? "external_logtime_rank" : "jpar_rank";
+    const datalist = document.getElementById("rankHistoryNames");
+    rankHistoryPeopleOptions().forEach(person => datalist.insertAdjacentHTML("beforeend", `<option value="${{escapeAttr(person.display)}}"></option>`));
+    document.getElementById("rankHistoryAdd").addEventListener("click", addRankHistoryPerson);
+    document.getElementById("rankHistorySearch").addEventListener("keydown", event => {{
+      if (event.key === "Enter") {{ event.preventDefault(); addRankHistoryPerson(); }}
+    }});
+    systemSelect.addEventListener("change", renderRankHistory);
+    document.getElementById("rankHistoryClear").addEventListener("click", () => {{ selectedRankHistoryPeople = []; renderRankHistory(); }});
+    rankHistoryInitialized = true;
+  }}
+  renderRankHistory();
+}}
+
 function renderTab(tab) {{
   if (renderedTabs.has(tab)) return;
   if (tab === "raw") {{
@@ -1749,6 +1998,8 @@ function renderTab(tab) {{
     renderRankScatterPlots();
     renderCustomRankComparison();
     renderSelectedPersonEvents();
+  }} else if (tab === "rank-history") {{
+    initializeRankHistory();
   }} else if (tab === "puzzler") {{
     initializePuzzlerProfile();
   }} else if (tab === "predictions") {{

@@ -34,3 +34,15 @@ python build_dashboard.py
 The scripts regenerate the intermediate data under `data/` and the final HTML under `output/`.
 
 The main implementation is in `code/`. The build entry point is `build_dashboard.py`.
+
+## Generating public ranking files
+
+```bash
+python export_public_rankings.py
+```
+
+### Experimental: Bucketted scores
+
+```bash
+python export_logtime_divisions.py
+```

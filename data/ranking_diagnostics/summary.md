@@ -1,21 +1,21 @@
 # Corrected Dataset Ranking Diagnostics
 
-Ranked members: 1,224
-Events analyzed: 51
-Date range: 2025-04-04 to 2026-03-29
+Ranked members: 1,234
+Events analyzed: 53
+Date range: 2025-04-04 to 2026-05-16
 
 ## Highest Correlations With JPAR
 
-- `mean_adjusted_event_jpar`: 0.994
+- `mean_adjusted_event_jpar`: 0.993
 - `trueskill_conservative`: 0.882
-- `best3_mean_log_zscore`: 0.801
-- `conservative_log_zscore`: 0.797
-- `mean_event_percentile`: 0.793
-- `mean_normalized_rank`: 0.786
-- `robust_log_zscore`: 0.786
+- `best3_mean_log_zscore`: 0.794
+- `conservative_log_zscore`: 0.791
+- `mean_event_percentile`: 0.787
+- `mean_normalized_rank`: 0.781
+- `robust_log_zscore`: 0.780
 - `elo_rating`: 0.775
-- `mean_log_zscore`: 0.774
-- `weighted_event_percentile`: 0.772
+- `mean_log_zscore`: 0.767
+- `weighted_event_percentile`: 0.767
 
 ## Notes
 
